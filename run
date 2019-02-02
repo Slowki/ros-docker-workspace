@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+set -e
+SCRIPT_DIR="$(cd "$( dirname "${BASH_SOURCE[0]}" )" > /dev/null 2>&1 && pwd)"
+IMAGE=$(basename $SCRIPT_DIR)
+GID=$(id -g $USER)
+DOCKER_XAUTHORITY=/tmp/.docker.xauth
+SHELL_NAME=$(basename $SHELL)
+
+# https://wiki.ros.org/docker/Tutorials/Hardware%20Acceleration#nvidia-docker2
+if [ ! -f $DOCKER_XAUTHORITY ]; then
+    xauth_list=$(xauth nlist :0 | sed -e 's/^..../ffff/')
+    if [ ! -z "$xauth_list" ]; then
+        echo $xauth_list | xauth -f $XAUTH nmerge -
+    else
+        touch $XAUTH
+    fi
+fi
+
+docker build --build-arg USER=$USER --build-arg UID=$UID --build-arg GID=$GID --build-arg SHELL=$SHELL_NAME -t $IMAGE $SCRIPT_DIR
+nvidia-docker run --rm -it \
+    -u $UID:$GID \
+    --env="DISPLAY=$DISPLAY" \
+    --env="QT_X11_NO_MITSHM=1" \
+    --env="XAUTHORITY=$XAUTHORITY" \
+    --volume="/tmp/.X11-unix:/tmp/.X11-unix:rw" \
+    --volume="$DOCKER_XAUTHORITY:$XAUTHORITY" \
+    --volume="$SCRIPT_DIR/workspace:/home/$USER/workspace" \
+    --runtime=nvidia \
+    $IMAGE \
+    $SHELL_NAME
