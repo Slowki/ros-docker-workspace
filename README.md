@@ -6,4 +6,22 @@ This repo contains an example Docker-based ROS workspace.
 * [nvidia-docker](https://github.com/NVIDIA/nvidia-docker) >= 2
 
 ## Usage
-The `run` script will build the image, start it, and mount `workspace` to `/home/<YOUR USERNAME>/workspace`. Inside the container you should be able to use any GUI-based tools you want.
+### Start the Container
+```sh
+./run # or ./run start [COMMAND]
+```
+
+### Exec into the Container
+```sh
+./run exec [COMMAND]
+```
+
+### Remove the Container
+```sh
+./run rm
+```
+
+### Remove the Image
+```sh
+./run rmi
+```

@@ -8,23 +8,112 @@ SHELL_NAME=$(basename $SHELL)
 
 # https://wiki.ros.org/docker/Tutorials/Hardware%20Acceleration#nvidia-docker2
 if [ ! -f $DOCKER_XAUTHORITY ]; then
-    xauth_list=$(xauth nlist :0 | sed -e 's/^..../ffff/')
+    xauth_list=$(xauth nlist $DISPLAY | sed -e 's/^..../ffff/')
     if [ ! -z "$xauth_list" ]; then
-        echo $xauth_list | xauth -f $XAUTH nmerge -
+        echo $xauth_list | xauth -f $DOCKER_XAUTHORITY nmerge -
     else
-        touch $XAUTH
+        touch $DOCKER_XAUTHORITY
     fi
 fi
 
-docker build --build-arg USER=$USER --build-arg UID=$UID --build-arg GID=$GID --build-arg SHELL=$SHELL_NAME -t $IMAGE $SCRIPT_DIR
-nvidia-docker run --rm -it \
-    -u $UID:$GID \
-    --env="DISPLAY=$DISPLAY" \
-    --env="QT_X11_NO_MITSHM=1" \
-    --env="XAUTHORITY=$XAUTHORITY" \
-    --volume="/tmp/.X11-unix:/tmp/.X11-unix:rw" \
-    --volume="$DOCKER_XAUTHORITY:$XAUTHORITY" \
-    --volume="$SCRIPT_DIR/workspace:/home/$USER/workspace" \
-    --runtime=nvidia \
-    $IMAGE \
-    $SHELL_NAME
+function loud_docker() {
+    set -x
+    nvidia-docker $@
+    set +x
+}
+
+function build_image() {
+    local tmp=$(mktemp)
+    if ! docker build \
+        --build-arg USER=$USER \
+        --build-arg UID=$UID \
+        --build-arg GID=$GID \
+        --build-arg SHELL=$SHELL_NAME \
+        -t $IMAGE $SCRIPT_DIR &> $tmp; then
+        result=$?
+        >&2 cat $tmp
+        exit $result
+    fi
+}
+build_image
+
+IMAGE_ID=$(docker images $IMAGE --format "{{.ID}}")
+
+function get_existing_container() {
+    docker ps -a --filter "ancestor=$IMAGE_ID" --format "{{ .ID }}" | head -n1 || echo ""
+}
+
+function exec_container() {
+    if [[ $# -ge 2 ]]; then
+        cmds=${@:2}
+    else
+        cmds=($SHELL_NAME)
+    fi
+    local container=$(get_existing_container)
+    nvidia-docker start $container 1> /dev/null
+    set -x
+    nvidia-docker exec -it $container $cmds
+}
+
+function usage() {
+    >&2 echo "Usage: $0 [start|stop|exec|rm|rmi]"
+}
+
+if [[ $# -eq 0 ]]; then
+    set start
+fi
+
+EXISTING_CONTAINER=$(get_existing_container)
+
+case $1 in
+    "start")
+        if [ -z "$EXISTING_CONTAINER" ]; then
+            loud_docker run -t \
+                -u $UID:$GID \
+                --env="DISPLAY=$DISPLAY" \
+                --env="QT_X11_NO_MITSHM=1" \
+                --env="XAUTHORITY=$XAUTHORITY" \
+                --volume="/tmp/.X11-unix:/tmp/.X11-unix:rw" \
+                --volume="$DOCKER_XAUTHORITY:$XAUTHORITY" \
+                --volume="$SCRIPT_DIR:/home/$USER/workspace" \
+                --runtime=nvidia \
+                --detach \
+                -h $SCRIPT_DIR \
+                $IMAGE \
+                cat -
+            exec_container $@
+        else
+            exec_container $@
+        fi
+        ;;
+    "stop")
+        if [ ! -z "$EXISTING_CONTAINER" ]; then
+            docker stop "${@:2}" $EXISTING_CONTAINER
+        else
+            >&2 echo "Error: no such container"
+            exit 1
+        fi
+        ;;
+    "exec")
+         if [ ! -z "$EXISTING_CONTAINER" ]; then
+            exec_container $@
+        else
+            >&2 echo "Error: no such container"
+            exit 1
+        fi
+        ;;
+    "rm")
+        if [ ! -z "$EXISTING_CONTAINER" ]; then
+            docker rm "${@:2}" $EXISTING_CONTAINER
+        else
+            >&2 echo "Error: no such container"
+            exit 1
+        fi
+        ;;
+    "rmi")
+        docker rmi $IMAGE
+        ;;
+    *)
+        usage
+        exit 1
+esac
